@@ -1,6 +1,6 @@
 # Market Data Backend — Summary
 
-**Status:** Complete, tested, reviewed, all issues resolved.
+**Status:** Complete, tested, and reviewed twice. Second review (`MARKET_DATA_REVIEW.md`) found a critical Massive bug and several smaller issues; all are fixed.
 
 ## What Was Built
 
@@ -44,18 +44,9 @@ MarketDataSource (ABC)
 
 ## Test Suite
 
-**73 tests, all passing.** 6 test modules in `backend/tests/market/`.
+**106 tests, all passing.** 7 test modules in `backend/tests/market/`. Overall coverage: 99% (`stream.py` now 100%).
 
-| Module | Tests | Coverage |
-|--------|-------|----------|
-| test_models.py | 11 | models.py: 100% |
-| test_cache.py | 13 | cache.py: 100% |
-| test_simulator.py | 17 | simulator.py: 98% |
-| test_simulator_source.py | 10 | (integration tests) |
-| test_factory.py | 7 | factory.py: 100% |
-| test_massive.py | 13 | massive_client.py: 56% (expected — API methods mocked) |
-
-Overall coverage: 84%.
+Massive tests build snapshots with the SDK's real `TickerSnapshot.from_dict`, not `MagicMock`, so field-name drift breaks the tests instead of production.
 
 ## Code Review & Fixes Applied
 
@@ -68,6 +59,16 @@ A comprehensive code review identified 7 issues. All were resolved:
 5. **Correlation constants cleaned up** — removed unused `DEFAULT_CORR`, consolidated into `CROSS_GROUP_CORR`
 6. **Unused test imports removed** — `pytest`, `math`, `asyncio` cleaned from 4 test files
 7. **Massive test mocks fixed** — `source._client` set in tests, patches target correct names
+
+### Second review fixes
+
+1. **Massive timestamps** — read `last_trade.sip_timestamp` (nanoseconds); the old `last_trade.timestamp` doesn't exist, so Massive mode produced no prices
+2. **Remove-during-poll race** — snapshots for tickers no longer tracked are dropped; the poll thread gets a copy of the ticker list
+3. **SSE router** — `create_stream_router` returns a fresh router per call; `CancelledError` is re-raised
+4. **Ticker normalization** — both sources strip + upper-case via `normalize_ticker`
+5. **Lifecycle** — `start()` twice raises; tickers added before `start()` are kept (both sources)
+6. **Cache** — `remove()` bumps `version` (SSE pushes removals); `version` read under lock; `timestamp=0.0` respected
+7. **Daily change** — `PriceUpdate.session_open` + `day_change_percent` (Massive: previous close; simulator: seed price)
 
 ## Demo
 

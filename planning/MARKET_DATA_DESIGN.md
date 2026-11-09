@@ -466,7 +466,7 @@ await src.stop()
 - Package `massive` (formerly Polygon.io). `RESTClient(api_key=...)` — synchronous.
 - Base URL `https://api.massive.com`; the client sets the `Authorization: Bearer` header.
 - **Endpoint used:** snapshot for many tickers in **one** call — `GET /v2/snapshot/locale/us/markets/stocks/tickers?tickers=AAPL,MSFT,…`, via `client.get_snapshot_all(market_type=SnapshotMarketType.STOCKS, tickers=[...])`. One call per poll is what keeps the free tier (5 req/min) viable.
-- Fields used per snapshot: `ticker`, `last_trade.price`, `last_trade.timestamp` (Unix **milliseconds**). Also available: `day.previous_close`, `day.change_percent`, `day.open/high/low/close/volume` (see §11.1).
+- Fields used per snapshot: `ticker`, `last_trade.price`, `last_trade.sip_timestamp` (Unix **nanoseconds**; the SDK's `LastTrade` has no `timestamp` field), `prev_day.close` (used as `session_open`). Also available: `todays_change_percent`, `day.open/high/low/close/volume` (see §11.1).
 - Errors raised by the client: 401 bad key, 403 plan lacks endpoint, 429 rate limit, 5xx (client retries 3×).
 - Outside market hours `last_trade.price` is the last trade (possibly after-hours), so prices are static; that is expected.
 
@@ -539,7 +539,7 @@ class MassiveDataSource(MarketDataSource):
                     self._cache.update(
                         ticker=snap.ticker,
                         price=snap.last_trade.price,
-                        timestamp=snap.last_trade.timestamp / 1000.0,    # ms → s
+                        timestamp=snap.last_trade.sip_timestamp / 1e9,   # ns → s
                     )
                 except (AttributeError, TypeError) as e:
                     logger.warning("Skipping snapshot for %s: %s", getattr(snap, "ticker", "???"), e)
@@ -631,7 +631,7 @@ es.onmessage = (e) => {
 Behaviour notes:
 
 - Because of version-based change detection, with Massive the client receives a frame only when a poll updated something (~every 15 s); with the simulator, roughly every 500 ms. The frontend must not assume a fixed cadence.
-- `create_stream_router` registers onto a module-level `router`; call it once per process. In tests that build several apps, construct a fresh `APIRouter` inside the factory instead (one-line fix; see review item 3.6 in `archive/MARKET_DATA_REVIEW.md`).
+- `create_stream_router` builds a fresh `APIRouter` on every call, so tests can create several apps safely.
 
 ---
 
@@ -846,7 +846,7 @@ def test_correlation_is_realized():
 ```python
 def _snap(ticker, price, ts_ms):
     s = MagicMock(); s.ticker = ticker
-    s.last_trade.price = price; s.last_trade.timestamp = ts_ms
+    s.last_trade.price = price; s.last_trade.sip_timestamp = ts_ns  # prefer TickerSnapshot.from_dict (see tests)
     return s
 
 async def test_poll_updates_cache_and_converts_ms():

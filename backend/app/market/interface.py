@@ -12,6 +12,9 @@ class MarketDataSource(ABC):
     schedule. Downstream code never calls the data source directly for prices —
     it reads from the cache.
 
+    Tickers are normalized (stripped, upper-cased) by every method, so
+    "aapl" and "AAPL" refer to the same ticker regardless of source.
+
     Lifecycle:
         source = create_market_data_source(cache)
         await source.start(["AAPL", "GOOGL", ...])
@@ -27,7 +30,8 @@ class MarketDataSource(ABC):
         """Begin producing price updates for the given tickers.
 
         Starts a background task that periodically writes to the PriceCache.
-        Must be called exactly once. Calling start() twice is undefined behavior.
+        Tickers added before start() are kept and merged with `tickers`.
+        Must be called exactly once; a second call raises RuntimeError.
         """
 
     @abstractmethod
@@ -42,7 +46,7 @@ class MarketDataSource(ABC):
     async def add_ticker(self, ticker: str) -> None:
         """Add a ticker to the active set. No-op if already present.
 
-        The next update cycle will include this ticker.
+        The next update cycle will include this ticker. May be called before start().
         """
 
     @abstractmethod
