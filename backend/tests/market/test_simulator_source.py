@@ -1,10 +1,12 @@
 """Integration tests for SimulatorDataSource."""
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 
 from app.market.cache import PriceCache
+from app.market.seed_prices import SEED_PRICES
 from app.market.simulator import SimulatorDataSource
 
 
@@ -94,19 +96,19 @@ class TestSimulatorDataSource:
         await source.stop()
 
     async def test_exception_resilience(self):
-        """Test that simulator continues running after errors."""
+        """The loop survives a failing step and keeps updating the cache."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.05)
-
-        # Start with a valid ticker
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.01)
         await source.start(["AAPL"])
 
-        # Wait for some updates
-        await asyncio.sleep(0.15)
+        with patch.object(
+            source._sim, "step", side_effect=[RuntimeError("boom"), {"AAPL": 123.45}, {}]
+        ) as mock_step:
+            await asyncio.sleep(0.1)
 
-        # Task should still be running
-        assert source._task is not None
+        assert mock_step.call_count >= 2
         assert not source._task.done()
+        assert cache.get_price("AAPL") == 123.45
 
         await source.stop()
 
@@ -125,14 +127,59 @@ class TestSimulatorDataSource:
         await source.stop()
 
     async def test_custom_event_probability(self):
-        """Test creating source with custom event probability."""
+        """event_probability is passed through to the simulator."""
         cache = PriceCache()
-        # Very high event probability for testing
-        source = SimulatorDataSource(
-            price_cache=cache, update_interval=0.1, event_probability=1.0
-        )
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1, event_probability=1.0)
+        await source.start(["AAPL"])
+        seed = cache.get_price("AAPL")
+
+        source._sim.step()  # every step carries a 2-5% shock
+
+        assert abs(source._sim.get_price("AAPL") / seed - 1) > 0.019
+        await source.stop()
+
+    async def test_ticker_normalization(self):
+        """Lower-case / padded tickers map to the same canonical ticker."""
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        await source.start([" aapl"])
+
+        await source.add_ticker("AAPL")
+        await source.add_ticker("tsla ")
+        assert source.get_tickers() == ["AAPL", "TSLA"]
+
+        await source.remove_ticker("tsla")
+        assert source.get_tickers() == ["AAPL"]
+        assert "TSLA" not in cache
+
+        await source.stop()
+
+    async def test_add_ticker_before_start(self):
+        """Tickers added before start() are kept and priced."""
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        await source.add_ticker("PYPL")
         await source.start(["AAPL"])
 
-        # Just verify it starts and stops cleanly
-        await asyncio.sleep(0.2)
+        assert source.get_tickers() == ["PYPL", "AAPL"]
+        assert "PYPL" in cache and "AAPL" in cache
+
         await source.stop()
+
+    async def test_double_start_raises(self):
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        await source.start(["AAPL"])
+        with pytest.raises(RuntimeError):
+            await source.start(["AAPL"])
+        await source.stop()
+
+    async def test_session_open_is_seed_price(self):
+        """Daily change is measured from the seed price."""
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.01)
+        await source.start(["AAPL"])
+        await asyncio.sleep(0.05)
+        await source.stop()
+
+        assert cache.get("AAPL").session_open == SEED_PRICES["AAPL"]

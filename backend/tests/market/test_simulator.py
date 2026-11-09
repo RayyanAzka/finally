@@ -1,5 +1,9 @@
 """Tests for GBMSimulator."""
 
+import math
+
+import numpy as np
+
 from app.market.seed_prices import SEED_PRICES
 from app.market.simulator import GBMSimulator
 
@@ -126,6 +130,43 @@ class TestGBMSimulator:
         result = sim.step()
         price_str = str(result["AAPL"])
         # Check that we have at most 2 decimal places
-        if '.' in price_str:
-            decimal_part = price_str.split('.')[1]
+        if "." in price_str:
+            decimal_part = price_str.split(".")[1]
             assert len(decimal_part) <= 2
+
+    def test_full_default_set_builds_cholesky(self):
+        """All 10 default tickers produce a valid correlation decomposition."""
+        sim = GBMSimulator(tickers=list(SEED_PRICES))
+        assert sim._cholesky is not None
+        assert sim._cholesky.shape == (10, 10)
+        assert set(sim.step()) == set(SEED_PRICES)
+
+    def test_many_unknown_tickers_stay_positive_definite(self):
+        sim = GBMSimulator(tickers=list(SEED_PRICES) + [f"X{i}" for i in range(40)])
+        assert sim._cholesky.shape == (50, 50)
+
+    def test_correlation_is_realized(self):
+        """Tech pair log-returns correlate near the 0.6 target."""
+        np.random.seed(0)
+        sim = GBMSimulator(tickers=["AAPL", "MSFT"], event_probability=0)
+        a, b = [], []
+        for _ in range(5000):
+            pa, pb = sim._prices["AAPL"], sim._prices["MSFT"]
+            sim.step()
+            a.append(math.log(sim._prices["AAPL"] / pa))
+            b.append(math.log(sim._prices["MSFT"] / pb))
+        assert 0.5 < np.corrcoef(a, b)[0, 1] < 0.7
+
+    def test_events_move_price_at_least_two_percent(self):
+        """With event_probability=1 every step includes a 2-5% shock."""
+        sim = GBMSimulator(tickers=["AAPL"], event_probability=1.0)
+        before = sim.get_price("AAPL")
+        sim.step()
+        move = abs(sim.get_price("AAPL") / before - 1)
+        assert 0.019 < move < 0.051
+
+    def test_add_tickers_batch(self):
+        sim = GBMSimulator(tickers=["AAPL"])
+        sim.add_tickers(["GOOGL", "MSFT", "AAPL"])
+        assert sim.get_tickers() == ["AAPL", "GOOGL", "MSFT"]
+        assert sim._cholesky.shape == (3, 3)

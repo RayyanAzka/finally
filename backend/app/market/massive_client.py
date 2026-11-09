@@ -10,6 +10,7 @@ from massive.rest.models import SnapshotMarketType
 
 from .cache import PriceCache
 from .interface import MarketDataSource
+from .models import normalize_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,14 @@ class MassiveDataSource(MarketDataSource):
         self._client: RESTClient | None = None
 
     async def start(self, tickers: list[str]) -> None:
+        if self._task is not None:
+            raise RuntimeError("MassiveDataSource already started")
         self._client = RESTClient(api_key=self._api_key)
-        self._tickers = list(tickers)
+        # Merge with any tickers added before start(), preserving order
+        for ticker in tickers:
+            ticker = normalize_ticker(ticker)
+            if ticker not in self._tickers:
+                self._tickers.append(ticker)
 
         # Do an immediate first poll so the cache has data right away
         await self._poll_once()
@@ -48,7 +55,7 @@ class MassiveDataSource(MarketDataSource):
         self._task = asyncio.create_task(self._poll_loop(), name="massive-poller")
         logger.info(
             "Massive poller started: %d tickers, %.1fs interval",
-            len(tickers),
+            len(self._tickers),
             self._interval,
         )
 
@@ -64,13 +71,14 @@ class MassiveDataSource(MarketDataSource):
         logger.info("Massive poller stopped")
 
     async def add_ticker(self, ticker: str) -> None:
-        ticker = ticker.upper().strip()
+        ticker = normalize_ticker(ticker)
         if ticker not in self._tickers:
-            self._tickers.append(ticker)
+            # Rebind rather than append: a poll thread may hold the old list
+            self._tickers = [*self._tickers, ticker]
             logger.info("Massive: added ticker %s (will appear on next poll)", ticker)
 
     async def remove_ticker(self, ticker: str) -> None:
-        ticker = ticker.upper().strip()
+        ticker = normalize_ticker(ticker)
         self._tickers = [t for t in self._tickers if t != ticker]
         self._cache.remove(ticker)
         logger.info("Massive: removed ticker %s", ticker)
@@ -94,20 +102,29 @@ class MassiveDataSource(MarketDataSource):
         try:
             # The Massive RESTClient is synchronous — run in a thread to
             # avoid blocking the event loop.
-            snapshots = await asyncio.to_thread(self._fetch_snapshots)
+            snapshots = await asyncio.to_thread(self._fetch_snapshots, list(self._tickers))
+            # A ticker removed while the request was in flight must not be
+            # written back into the cache.
+            active = set(self._tickers)
             processed = 0
             for snap in snapshots:
+                if snap.ticker not in active:
+                    continue
                 try:
-                    price = snap.last_trade.price
-                    # Massive timestamps are Unix milliseconds → convert to seconds
-                    timestamp = snap.last_trade.timestamp / 1000.0
+                    trade = snap.last_trade
+                    if trade.price is None:
+                        raise ValueError("no last trade price")
+                    # lastTrade.t (sip_timestamp) is Unix nanoseconds → seconds
+                    timestamp = trade.sip_timestamp / 1e9 if trade.sip_timestamp else None
+                    prev_close = snap.prev_day.close if snap.prev_day else None
                     self._cache.update(
                         ticker=snap.ticker,
-                        price=price,
+                        price=trade.price,
                         timestamp=timestamp,
+                        session_open=prev_close or None,
                     )
                     processed += 1
-                except (AttributeError, TypeError) as e:
+                except (AttributeError, TypeError, ValueError) as e:
                     logger.warning(
                         "Skipping snapshot for %s: %s",
                         getattr(snap, "ticker", "???"),
@@ -120,9 +137,9 @@ class MassiveDataSource(MarketDataSource):
             # Don't re-raise — the loop will retry on the next interval.
             # Common failures: 401 (bad key), 429 (rate limit), network errors.
 
-    def _fetch_snapshots(self) -> list:
+    def _fetch_snapshots(self, tickers: list[str]) -> list:
         """Synchronous call to the Massive REST API. Runs in a thread."""
         return self._client.get_snapshot_all(
             market_type=SnapshotMarketType.STOCKS,
-            tickers=self._tickers,
+            tickers=tickers,
         )
