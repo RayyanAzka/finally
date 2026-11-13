@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+.env
+db/finally.db*
+planning
+test
+scripts
+**/node_modules
+**/.next
+frontend/out
+**/__pycache__
+**/.venv
+**/.pytest_cache
+**/.ruff_cache

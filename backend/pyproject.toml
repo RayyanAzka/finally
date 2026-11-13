@@ -10,6 +10,9 @@ dependencies = [
     "numpy>=2.0.0",
     "massive>=1.0.0",
     "rich>=13.0.0",
+    "litellm>=1.109.1",
+    "pydantic>=2.12.5",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]

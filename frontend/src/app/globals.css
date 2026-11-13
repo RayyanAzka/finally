@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #0d1117;
+  color: #d6dde8;
+}
+
+body {
+  font-feature-settings: 'tnum' 1;
+}
+
+.num {
+  font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Price flash: instant color, then fade out over ~500ms */
+.flash-up {
+  background-color: rgba(38, 194, 129, 0.35);
+  transition: none;
+}
+.flash-down {
+  background-color: rgba(239, 75, 95, 0.35);
+  transition: none;
+}
+.flash-idle {
+  background-color: transparent;
+  transition: background-color 500ms ease-out;
+}
+
+.panel {
+  background: #111822;
+  border: 1px solid #202b3a;
+}
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #9aa7ba;
+  letter-spacing: 0.02em;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a384b;
+  border-radius: 4px;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid #209dd7;
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flash-idle {
+    transition: none;
+  }
+}
